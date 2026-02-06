@@ -15,6 +15,7 @@ import {
   doc, 
   setDoc, 
   updateDoc, 
+  deleteDoc,
   serverTimestamp,
   getDocs,
   where
@@ -41,22 +42,17 @@ import {
   Eye,
   EyeOff,
   Key,
-  LogIn
+  LogIn,
+  RotateCcw
 } from 'lucide-react';
 
 /**
- * PENTING:
- * Di lingkungan lokal (Vite), gunakan: import.meta.env.VITE_FIREBASE_API_KEY
- * Namun, untuk kompatibilitas pratinjau ini, saya menambahkan fallback string kosong.
- * Pastikan saat deploy ke Vercel, variabel ini sudah terisi di Dashboard Vercel.
+ * Konfigurasi lingkungan tetap menggunakan fallback string kosong.
  */
-
 const getEnv = (key, fallback = "") => {
   try {
-    // Mencoba mengakses variabel lingkungan standar Vite
     return import.meta.env[key] || fallback;
   } catch (e) {
-    // Fallback jika import.meta tidak tersedia di environment tertentu
     return fallback;
   }
 };
@@ -71,7 +67,6 @@ const firebaseConfig = {
   measurementId: getEnv('VITE_FIREBASE_MEASUREMENT_ID')
 };
 
-// Inisialisasi Firebase hanya jika API Key tersedia
 let app, auth, db;
 const hasConfig = !!firebaseConfig.apiKey;
 
@@ -81,8 +76,8 @@ if (hasConfig) {
   db = getFirestore(app);
 }
 
-const appId = getEnv('VITE_APP_ID');
-const ADMIN_SECRET = getEnv('VITE_ADMIN_SECRET'); 
+const appId = getEnv('VITE_APP_ID', 'bukber-ti-2024');
+const ADMIN_SECRET = getEnv('VITE_ADMIN_SECRET', 'admin123'); 
 
 const EVENT_STATUS = {
   WAITING: 'waiting',
@@ -114,6 +109,8 @@ export default function App() {
   const [regError, setRegError] = useState('');
   const [isAlreadyRegistered, setIsAlreadyRegistered] = useState(false);
   const [showCode, setShowCode] = useState(false);
+  const [localMessage, setLocalMessage] = useState('');
+  const [isSavingMessage, setIsSavingMessage] = useState(false);
 
   const [quizEditor, setQuizEditor] = useState({
     question: "",
@@ -121,14 +118,21 @@ export default function App() {
     correctAnswer: 0
   });
 
-  // Efek untuk menangani jika Config Firebase kosong (saat baru pertama buka di preview)
   useEffect(() => {
     if (!hasConfig) {
       setLoading(false);
       return;
     }
 
-    signInAnonymously(auth).catch(console.error);
+    const initAuth = async () => {
+      try {
+        await signInAnonymously(auth);
+      } catch (err) {
+        console.error("Auth error:", err);
+      }
+    };
+    initAuth();
+
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       const savedId = localStorage.getItem(`${appId}_participant_id`);
@@ -149,7 +153,8 @@ export default function App() {
         const myData = data.find(p => p.id === savedId);
         if (myData) {
           setMyParticipantData(myData);
-          if (view === 'landing' || view === 'guest-reg' || view === 'guest-login') {
+          setLocalMessage(myData.message || '');
+          if (view === 'landing' || view === 'guest-reg') {
             setView('guest-dash');
           }
         } else {
@@ -162,7 +167,7 @@ export default function App() {
       setLoading(false);
     });
     return () => unsubscribe();
-  }, [user, view]);
+  }, [user]);
 
   useEffect(() => {
     if (!user || !db) return;
@@ -191,17 +196,17 @@ export default function App() {
 
     if (existingParticipant && !isAlreadyRegistered) {
       setIsAlreadyRegistered(true);
-      setRegError('Nama ini sudah terdaftar. Masukkan kode akses Anda untuk melanjutkan.');
+      setRegError('Nama ini sudah terdaftar. Masukkan kode akses Anda.');
       return;
     }
 
     if (isAlreadyRegistered) {
-      if (existingParticipant.accessCode === loginCode.trim()) {
+      if (existingParticipant?.accessCode === loginCode.trim()) {
         localStorage.setItem(`${appId}_participant_id`, existingParticipant.id);
         setMyParticipantData(existingParticipant);
         setView('guest-dash');
       } else {
-        setRegError('Kode akses salah. Silakan coba lagi.');
+        setRegError('Kode akses salah.');
       }
       return;
     }
@@ -253,6 +258,23 @@ export default function App() {
     }, { merge: true });
   };
 
+  const resetWinner = async () => {
+    if (!db) return;
+    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'main'), {
+      ...globalConfig,
+      activeWinner: null
+    }, { merge: true });
+  };
+
+  const deleteParticipant = async (id) => {
+    if (!db || !window.confirm('Hapus data peserta ini?')) return;
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', id));
+    } catch (err) {
+      console.error("Delete error:", err);
+    }
+  };
+
   const submitQuiz = async (idx) => {
     if (!myParticipantData || !db) return;
     await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', myParticipantData.id), {
@@ -260,15 +282,25 @@ export default function App() {
     });
   };
 
+  const saveMessage = async () => {
+    if (!myParticipantData || !db) return;
+    setIsSavingMessage(true);
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', myParticipantData.id), {
+        message: localMessage
+      });
+    } catch (err) {
+      console.error("Save message error:", err);
+    }
+    setIsSavingMessage(false);
+  };
+
   if (!hasConfig) {
     return (
-      <div className="min-h-screen bg-[#020617] text-slate-200 flex flex-col items-center justify-center p-6 text-center">
+      <div className="min-h-screen bg-[#020617] text-slate-200 flex flex-col items-center justify-center p-6 text-center font-sans">
         <AlertTriangle className="w-12 h-12 text-amber-500 mb-4" />
-        <h1 className="text-xl font-bold mb-2">Konfigurasi Firebase Belum Ada</h1>
-        <p className="text-slate-400 text-sm max-w-md">
-          Aplikasi ini memerlukan Environment Variables (VITE_FIREBASE_API_KEY, dll) untuk berfungsi. 
-          Silakan tambahkan variabel tersebut di lingkungan pengembangan Anda atau di dashboard Vercel.
-        </p>
+        <h1 className="text-xl font-bold mb-2 uppercase tracking-tighter">Configuration Missing</h1>
+        <p className="text-slate-400 text-sm max-w-md">Firebase environment variables are required.</p>
       </div>
     );
   }
@@ -280,12 +312,9 @@ export default function App() {
     </div>
   );
 
-  // ... (Sisa logika tampilan tetap sama seperti sebelumnya)
-  // [Kode UI disingkat untuk efisiensi, namun fungsionalitas tetap sama]
-
   if (view === 'landing') {
     return (
-      <div className="min-h-screen bg-[#020617] text-slate-200 flex flex-col items-center justify-center p-6 relative overflow-hidden">
+      <div className="min-h-screen bg-[#020617] text-slate-200 flex flex-col items-center justify-center p-6 relative overflow-hidden font-sans">
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-96 h-96 bg-emerald-600/10 blur-[120px] rounded-full"></div>
         <div className="relative z-10 text-center space-y-8 max-w-sm w-full">
           <Moon className="w-16 h-16 text-emerald-400 mx-auto drop-shadow-[0_0_15px_rgba(52,211,153,0.3)]" />
@@ -308,7 +337,7 @@ export default function App() {
 
   if (view === 'guest-reg') {
     return (
-      <div className="min-h-screen bg-[#020617] flex items-center justify-center p-6">
+      <div className="min-h-screen bg-[#020617] flex items-center justify-center p-6 font-sans">
         <div className="w-full max-w-md bg-slate-900/40 border border-slate-800 backdrop-blur-xl p-8 rounded-[2.5rem] shadow-2xl">
            <h2 className="text-2xl font-bold text-white mb-2">{isAlreadyRegistered ? 'Verifikasi Akses' : 'Daftar Peserta'}</h2>
            <p className="text-slate-500 text-xs mb-8">
@@ -424,7 +453,14 @@ export default function App() {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <div className="lg:col-span-5 space-y-8">
               <div className="bg-slate-900/30 border border-slate-800 p-8 rounded-3xl space-y-6">
-                <div className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase tracking-widest"><Settings className="w-4 h-4"/> Global_Phase</div>
+                <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-widest">
+                  <span className="flex items-center gap-2"><Settings className="w-4 h-4"/> Global_Phase</span>
+                  {globalConfig.activeWinner && (
+                    <button onClick={resetWinner} className="flex items-center gap-1 text-red-400 hover:text-red-300 transition-colors">
+                      <RotateCcw size={12}/> <span className="text-[8px]">RESET_WINNER</span>
+                    </button>
+                  )}
+                </div>
                 <div className="grid grid-cols-2 gap-3">
                   {Object.values(EVENT_STATUS).map(status => (
                     <button 
@@ -490,7 +526,7 @@ export default function App() {
                           <th className="px-4 pb-2">Peserta</th>
                           <th className="px-4 pb-2">Kode</th>
                           <th className="px-4 pb-2">Nomor</th>
-                          <th className="px-4 pb-2">Status_Kuis</th>
+                          <th className="px-4 pb-2">Aksi</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -506,13 +542,13 @@ export default function App() {
                                <td className="px-4 py-4 border-y border-slate-800 font-mono text-slate-400">{p.accessCode}</td>
                                <td className="px-4 py-4 border-y border-slate-800 font-mono text-emerald-500 font-black">#{p.lotteryNumber}</td>
                                <td className="px-4 py-4 rounded-r-2xl border-r border-y border-slate-800">
-                                  {hasAnswered ? (
-                                    <span className={`px-2 py-1 rounded-md text-[9px] font-bold uppercase ${isCorrect ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-red-500/10 text-red-500 border border-red-500/20'}`}>
-                                      {isCorrect ? 'CORRECT' : 'WRONG'}
-                                    </span>
-                                  ) : (
-                                    <span className="text-slate-700 text-[9px] italic">NO_INPUT</span>
-                                  )}
+                                  <button 
+                                    onClick={() => deleteParticipant(p.id)}
+                                    className="p-2 text-slate-600 hover:text-red-500 transition-colors"
+                                    title="Hapus Peserta"
+                                  >
+                                    <Trash2 size={16}/>
+                                  </button>
                                 </td>
                             </tr>
                           );
@@ -530,7 +566,7 @@ export default function App() {
 
   // View untuk user dashboard
   return (
-    <div className="min-h-screen bg-[#020617] text-slate-200 flex flex-col relative overflow-hidden">
+    <div className="min-h-screen bg-[#020617] text-slate-200 flex flex-col relative overflow-hidden font-sans">
       <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_-20%,#064e3b,transparent)] opacity-40"></div>
       
       <header className="z-20 bg-slate-950/40 backdrop-blur-xl border-b border-slate-800/50 p-6 flex justify-between items-center px-10">
@@ -631,12 +667,24 @@ export default function App() {
                   <h2 className="font-black uppercase tracking-tight">Kesan_Ramadhan</h2>
                </div>
                <textarea 
-                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 h-32 mb-6 outline-none focus:border-cyan-500 transition-all text-sm font-mono placeholder:text-slate-700"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 h-32 mb-4 outline-none focus:border-cyan-500 transition-all text-sm font-mono placeholder:text-slate-700 text-white"
                   placeholder="Ketik pesan atau harapanmu..."
-                  value={myParticipantData?.message || ""}
-                  onChange={(e) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', myParticipantData.id), { message: e.target.value })}
+                  value={localMessage}
+                  onChange={(e) => setLocalMessage(e.target.value)}
                />
-               <div className="text-center text-[10px] font-mono text-cyan-900 tracking-widest uppercase">Data_Auto_Syncing...</div>
+               <button 
+                onClick={saveMessage}
+                disabled={isSavingMessage}
+                className="w-full py-4 bg-cyan-500 text-slate-950 font-black rounded-2xl uppercase tracking-widest shadow-lg shadow-cyan-500/10 hover:scale-[1.02] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+               >
+                 {isSavingMessage ? (
+                   <div className="w-4 h-4 border-2 border-slate-950/20 border-t-slate-950 rounded-full animate-spin"></div>
+                 ) : (
+                   <Save size={18} />
+                 )}
+                 SIMPAN_PESAN
+               </button>
+               <div className="mt-4 text-center text-[9px] font-mono text-cyan-900 tracking-[0.3em] uppercase">Manual_Save_Required_For_Stability</div>
             </div>
           )}
         </div>
