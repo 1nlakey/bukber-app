@@ -43,7 +43,9 @@ import {
   EyeOff,
   Key,
   LogIn,
-  RotateCcw
+  RotateCcw,
+  MessageCircle,
+  Clock
 } from 'lucide-react';
 
 /**
@@ -111,6 +113,9 @@ export default function App() {
   const [showCode, setShowCode] = useState(false);
   const [localMessage, setLocalMessage] = useState('');
   const [isSavingMessage, setIsSavingMessage] = useState(false);
+  
+  // Custom Modal State
+  const [deleteModal, setDeleteModal] = useState({ isOpen: false, participantId: null, participantName: '' });
 
   const [quizEditor, setQuizEditor] = useState({
     question: "",
@@ -266,10 +271,12 @@ export default function App() {
     }, { merge: true });
   };
 
-  const deleteParticipant = async (id) => {
-    if (!db || !window.confirm('Hapus data peserta ini?')) return;
+  const deleteParticipant = async () => {
+    const { participantId } = deleteModal;
+    if (!db || !participantId) return;
     try {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', id));
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', participantId));
+      setDeleteModal({ isOpen: false, participantId: null, participantName: '' });
     } catch (err) {
       console.error("Delete error:", err);
     }
@@ -283,16 +290,52 @@ export default function App() {
   };
 
   const saveMessage = async () => {
-    if (!myParticipantData || !db) return;
+    // Memastikan ID tersedia dan koneksi DB ada
+    const savedId = localStorage.getItem(`${appId}_participant_id`);
+    if (!savedId || !db) return;
+    
     setIsSavingMessage(true);
     try {
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', myParticipantData.id), {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'participants', savedId), {
         message: localMessage
       });
+      // Sukses menyimpan, data akan diupdate otomatis via onSnapshot
     } catch (err) {
       console.error("Save message error:", err);
     }
     setIsSavingMessage(false);
+  };
+
+  // Modern Custom Confirmation Modal
+  const ConfirmModal = () => {
+    if (!deleteModal.isOpen) return null;
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
+        <div className="bg-slate-900 border border-slate-800 p-8 rounded-[2rem] w-full max-w-sm text-center space-y-6 shadow-2xl scale-in-center">
+          <div className="w-16 h-16 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center mx-auto">
+            <AlertTriangle size={32} />
+          </div>
+          <div>
+            <h3 className="text-xl font-bold text-white mb-2 uppercase">Hapus Peserta?</h3>
+            <p className="text-slate-400 text-sm">Anda akan menghapus data <span className="text-white font-bold">{deleteModal.participantName}</span> secara permanen.</p>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button 
+              onClick={() => setDeleteModal({ isOpen: false, participantId: null, participantName: '' })}
+              className="flex-1 py-4 bg-slate-800 text-white font-bold rounded-2xl hover:bg-slate-700 transition-colors uppercase text-[10px] tracking-widest"
+            >
+              Batal
+            </button>
+            <button 
+              onClick={deleteParticipant}
+              className="flex-1 py-4 bg-red-500 text-slate-950 font-black rounded-2xl hover:bg-red-400 transition-colors uppercase text-[10px] tracking-widest"
+            >
+              Hapus
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   if (!hasConfig) {
@@ -439,6 +482,7 @@ export default function App() {
   if (view === 'admin-dash') {
     return (
       <div className="min-h-screen bg-[#020617] text-slate-300 font-sans p-6 md:p-12">
+        <ConfirmModal />
         <div className="max-w-7xl mx-auto space-y-10">
           <div className="flex justify-between items-end border-b border-slate-800 pb-8">
             <div className="space-y-1">
@@ -470,6 +514,31 @@ export default function App() {
                       {status}
                     </button>
                   ))}
+                </div>
+              </div>
+
+              {/* Feed Pesan di Admin */}
+              <div className="bg-slate-900/30 border border-slate-800 p-8 rounded-3xl space-y-6 max-h-[400px] overflow-hidden flex flex-col">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase tracking-widest">
+                  <MessageCircle className="w-4 h-4"/> Message_Feed
+                </div>
+                <div className="flex-1 overflow-y-auto space-y-3 pr-2 scrollbar-thin scrollbar-thumb-slate-800">
+                  {participants.filter(p => p.message).length > 0 ? (
+                    participants.filter(p => p.message).map(p => (
+                      <div key={p.id} className="bg-slate-950 p-4 rounded-2xl border border-slate-800/50">
+                        <div className="flex justify-between items-center mb-2">
+                           <span className="text-[9px] font-mono text-emerald-500 font-bold uppercase">{p.name}</span>
+                           <span className="text-[8px] font-mono text-slate-600">#{p.lotteryNumber}</span>
+                        </div>
+                        <p className="text-xs text-slate-300 italic leading-relaxed">"{p.message}"</p>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="h-full flex flex-col items-center justify-center opacity-20 py-10">
+                       <MessageSquare size={32} />
+                       <span className="text-[8px] font-mono mt-2">NO_MESSAGES_YET</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -531,8 +600,6 @@ export default function App() {
                       </thead>
                       <tbody>
                         {participants.map(p => {
-                          const isCorrect = p.quizAnswer === globalConfig.quizData?.correctAnswer;
-                          const hasAnswered = p.quizAnswer !== null && p.quizAnswer !== undefined;
                           return (
                             <tr key={p.id} className="bg-slate-950/50 hover:bg-slate-900 transition-colors group">
                                <td className="px-4 py-4 rounded-l-2xl border-l border-y border-slate-800 group-hover:border-emerald-500/30">
@@ -543,7 +610,7 @@ export default function App() {
                                <td className="px-4 py-4 border-y border-slate-800 font-mono text-emerald-500 font-black">#{p.lotteryNumber}</td>
                                <td className="px-4 py-4 rounded-r-2xl border-r border-y border-slate-800">
                                   <button 
-                                    onClick={() => deleteParticipant(p.id)}
+                                    onClick={() => setDeleteModal({ isOpen: true, participantId: p.id, participantName: p.name })}
                                     className="p-2 text-slate-600 hover:text-red-500 transition-colors"
                                     title="Hapus Peserta"
                                   >
@@ -582,7 +649,7 @@ export default function App() {
          </button>
       </header>
 
-      <main className="flex-1 flex flex-col items-center justify-center p-8 z-10 max-w-xl mx-auto w-full">
+      <main className="flex-1 flex flex-col items-center p-8 z-10 max-w-xl mx-auto w-full pb-20">
         <div className="relative mb-12 group">
            <div className="absolute inset-0 bg-emerald-500/10 blur-[80px] rounded-full animate-pulse"></div>
            <div className="relative bg-[#0a0f1e] border border-emerald-500/20 rounded-[3rem] p-10 shadow-2xl overflow-hidden w-80 md:w-96 text-center">
@@ -617,7 +684,7 @@ export default function App() {
            </div>
         </div>
 
-        <div className="w-full space-y-4">
+        <div className="w-full space-y-6">
           {globalConfig.eventStatus === EVENT_STATUS.WAITING && (
             <div className="text-center space-y-2 py-10 bg-slate-900/20 border border-slate-800/50 rounded-[2rem] border-dashed">
                <div className="text-emerald-500/50 text-[10px] font-mono tracking-widest uppercase animate-pulse">Listening_for_events...</div>
@@ -667,7 +734,7 @@ export default function App() {
                   <h2 className="font-black uppercase tracking-tight">Kesan_Ramadhan</h2>
                </div>
                <textarea 
-                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 h-32 mb-4 outline-none focus:border-cyan-500 transition-all text-sm font-mono placeholder:text-slate-700 text-white"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-5 h-32 mb-4 outline-none focus:border-cyan-500 transition-all text-sm font-mono placeholder:text-slate-700 text-white resize-none"
                   placeholder="Ketik pesan atau harapanmu..."
                   value={localMessage}
                   onChange={(e) => setLocalMessage(e.target.value)}
@@ -684,7 +751,28 @@ export default function App() {
                  )}
                  SIMPAN_PESAN
                </button>
-               <div className="mt-4 text-center text-[9px] font-mono text-cyan-900 tracking-[0.3em] uppercase">Manual_Save_Required_For_Stability</div>
+               
+               {/* Feed Pesan untuk Peserta */}
+               <div className="mt-10 pt-10 border-t border-slate-800">
+                 <div className="flex items-center gap-2 text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-6">
+                    <MessageCircle size={14} /> Other_Messages
+                 </div>
+                 <div className="space-y-4 max-h-[300px] overflow-y-auto pr-2 scrollbar-hide">
+                    {participants.filter(p => p.message && p.id !== myParticipantData?.id).length > 0 ? (
+                      participants.filter(p => p.message && p.id !== myParticipantData?.id).map(p => (
+                        <div key={p.id} className="bg-slate-950/40 border border-slate-800 p-5 rounded-2xl">
+                          <div className="flex justify-between mb-2">
+                             <span className="text-[10px] font-bold text-cyan-500 uppercase">{p.name}</span>
+                             <Clock size={10} className="text-slate-700" />
+                          </div>
+                          <p className="text-xs text-slate-400 leading-relaxed font-light">"{p.message}"</p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-[10px] text-slate-700 font-mono text-center py-4">BELUM_ADA_PESAN_LAIN</p>
+                    )}
+                 </div>
+               </div>
             </div>
           )}
         </div>
