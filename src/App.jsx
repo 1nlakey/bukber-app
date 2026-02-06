@@ -81,8 +81,8 @@ if (hasConfig) {
   db = getFirestore(app);
 }
 
-const appId = getEnv('VITE_APP_ID', 'bukberti25');
-const ADMIN_SECRET = getEnv('VITE_ADMIN_SECRET', "BUKBER_ROOT_ACCESS"); 
+const appId = getEnv('VITE_APP_ID');
+const ADMIN_SECRET = getEnv('VITE_ADMIN_SECRET'); 
 
 const EVENT_STATUS = {
   WAITING: 'waiting',
